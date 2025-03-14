@@ -55,8 +55,8 @@ ParsedNode.I = {
 	},
 }
 
----@param node desserts.util.trie.Node
----@return desserts.util.trie.Node
+---@param node desserts.pairs.Node
+---@return desserts.pairs.Node
 function ParsedNode.O:extend_node(node)
 	error("`ParsedNode:extend_node` not implemented")
 end
@@ -83,7 +83,12 @@ ParsedCharNode.I = {
 function ParsedCharNode.O:extend_node(node)
 	for i = 1, #self.buf do
 		local c = self.buf:sub(i, i)
-		node = node:insert_child(c)
+		local b = string.byte(c)
+		if not node.children[b] then
+			node.children[b] = require("desserts.pairs.core.trie").Node.new()
+			node.len = node.len + 1
+		end
+		node = node.children[b]
 	end
 	return node
 end
@@ -116,13 +121,16 @@ ParsedPatNode.I = {
 }
 
 function ParsedPatNode.O:extend_node(node)
-	if not node.pat then
-		node.pat = self.pat
+	if not node.children[node] then
+		local new_node = require("desserts.pairs.core.trie").Node.new()
+		new_node.pat = self.pat
+		node.children[node] = new_node
 	else
-		node.pat = node.pat + self.pat
+		local curr = node.children[node]
+		curr.pat = curr.pat + self.pat
 	end
 
-	return node
+	return node.children[node]
 end
 
 function ParsedPatNode.O:expand(ecx)

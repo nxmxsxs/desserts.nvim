@@ -2,11 +2,11 @@ local M = {}
 
 local Node = {}
 
----@class desserts.util.trie.Node
----@field children table<integer, desserts.util.trie.Node>
+---@class desserts.pairs.Node
+---@field children table<(integer|desserts.pairs.Node), desserts.pairs.Node>
 ---@field len integer
 ---@field pat? vim.lpeg.Pattern
----@field leaf? desserts.util.trie.ParsedNode[]
+---@field leaf? desserts.pairs.trie.ParsedNode[]
 Node.O = {}
 
 Node.I = {
@@ -25,44 +25,24 @@ function Node.I.new()
 	return self
 end
 
----@param key string
----@return desserts.util.trie.Node
-function Node.O:insert_child(key)
-	assert(key:len() == 1)
-
-	local b = string.byte(key)
-	if not self.children[b] then
-		self.children[b] = Node.I.new()
-    self.len = self.len + 1
-	end
-	return self.children[b]
-end
-
-function Node.O:next_child(key)
-	assert(key:len() == 1)
-
-	local b = string.byte(key)
-	return self.children[b]
-end
-
 ---@param ecx { captures: table<string, string> }
 function Node.O:expand(ecx)
-  if not self.leaf then
-    return nil
-  end
+	if not self.leaf then
+		return nil
+	end
 
-  local out = {}
-  for _, n in ipairs(self.leaf) do
-    table.insert(out, n:expand(ecx))
-  end
+	local out = {}
+	for _, n in ipairs(self.leaf) do
+		table.insert(out, n:expand(ecx))
+	end
 
-  return table.concat(out, "")
+	return table.concat(out, "")
 end
 
 local Trie = {}
 
----@class desserts.util.trie.Trie
----@field root desserts.util.trie.Node
+---@class desserts.pairs.Trie
+---@field root desserts.pairs.Node
 Trie.O = {}
 
 Trie.I = {
@@ -72,24 +52,25 @@ Trie.I = {
 	},
 }
 
----@return desserts.util.trie.Trie
+---@return desserts.pairs.Trie
 function Trie.I.new()
-	local self = setmetatable({}, Trie.I.mt) --[[@as desserts.util.trie.Trie]]
+	local self = setmetatable({}, Trie.I.mt) --[[@as desserts.pairs.Trie]]
 
 	self.root = Node.I.new()
 
 	return self
 end
 
----@param parsed_nodes desserts.util.trie.ParsedNode[]
----@param parsed_close desserts.util.trie.ParsedNode[]
----@return desserts.util.trie.Node
-function Trie.O:insert(parsed_nodes, parsed_close)
+---@param parsed_nodes desserts.pairs.trie.ParsedNode[]
+---@param leaf desserts.pairs.trie.ParsedNode[]
+---@return desserts.pairs.Node
+function Trie.O:insert(parsed_nodes, leaf)
 	local curr = self.root
 	for _, parsed_node in ipairs(parsed_nodes) do
 		curr = parsed_node:extend_node(curr)
 	end
-	curr.leaf = parsed_close
+	assert(not curr.pat, "pattern nodes cannot be leaf nodes")
+	curr.leaf = leaf
 
 	return curr
 end
@@ -154,5 +135,9 @@ end
 --- end
 
 M.new = Trie.I.new
+
+M.Node = {
+	new = Node.I.new,
+}
 
 return M

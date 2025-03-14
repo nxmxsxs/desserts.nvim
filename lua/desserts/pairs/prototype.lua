@@ -68,40 +68,54 @@ function MatchingCtx.O:peek(key)
 	if self.cursor.pat then
 		local input = self.matching and self.matching .. key or key
 		local captured_id = self.cursor.pat:match(input)
-
-		-- Snacks.debug.inspect({
-		-- 	captured_id = captured_id or "nil",
-		-- 	from = input,
-		-- 	ctx = string.format("%p", self),
-		-- 	pat = self.cursor.pat or "nil",
-		-- })
 		if captured_id then
 			self.matching = input
 			self.captures[captured_id] = self.matching
+
 			return self
-		else
-			self.matching = nil
-			local next_node = self.cursor.children[string.byte(key)]
-
-			if next_node then
-				return MatchingCtx.I.new({
-					cursor = next_node,
-					extmark_id = self.open_extmark_id,
-					captures = self.captures,
-				})
-			end
-		end
-	else
-		local next_node = self.cursor.children[string.byte(key)]
-
-		if next_node then
-			return MatchingCtx.I.new({
-				cursor = next_node,
-				extmark_id = self.open_extmark_id,
-				captures = self.captures,
-			})
+		elseif not self.matching then
+			return nil
 		end
 	end
+
+	local next_node = self.cursor.children[string.byte(key)]
+
+	if next_node then
+		return MatchingCtx.I.new({
+			cursor = next_node,
+			open_extmark_id = self.open_extmark_id,
+			captures = self.captures,
+		})
+	end
+
+	local next_dyn_node = self.cursor.children[self.cursor]
+
+	if not next_dyn_node then
+		return nil
+	end
+
+	assert(next_dyn_node.pat)
+
+	local captured_id = next_dyn_node.pat:match(key)
+
+	-- Snacks.debug.inspect({
+	-- 	captured_id = captured_id or "nil",
+	-- 	from = key,
+	-- 	-- ctx = string.format("%p", self),
+	-- 	-- pat = self.cursor.pat or "nil",
+	-- })
+	if captured_id then
+		local next_matching_ctx = MatchingCtx.I.new({
+			cursor = next_dyn_node,
+			open_extmark_id = self.open_extmark_id,
+			captures = vim.tbl_deep_extend("error", self.captures, { [captured_id] = key }),
+			matching = key,
+		})
+
+		return next_matching_ctx
+	end
+
+	return nil
 end
 
 ---@type table<integer, MatchingCtx>

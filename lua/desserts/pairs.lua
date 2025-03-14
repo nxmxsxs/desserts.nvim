@@ -32,10 +32,10 @@ function M.create_pair(open_str, close_str, opts)
 	Pairs.state.close_trie:insert(parsed_close, parsed_open)
 end
 
-M.create_pair("<{id}{attrs}>", "</{id}{n}>", {
+M.create_pair("<{id}>", "</{id}{n}>", {
 	defs = {
 		id = ((vim.lpeg.R("az", "AZ", "09") + vim.lpeg.S("._-")) ^ 1 * -vim.lpeg.P(1)), -- only shared captures can be patterns, otherwise they would simply be expanded to an empty str
-		attrs = vim.lpeg.P("attrs"), -- ignore all pattern,
+		attrs = vim.lpeg.P("@") * -vim.lpeg.P(1),
 
 		n = function(...)
 			return ...
