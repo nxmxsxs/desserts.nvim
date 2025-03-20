@@ -3,7 +3,7 @@
 
   pairs.setup({
     pairs = {
-      pairs.create_pair('"', '"'),
+      pairs.create_pair('"', '"'):with_filetypes(...):with_close(...),
       pairs.create_pair("'", "'"),
       pairs.create_pair("{", "}"),
       pairs.create_pair("(", ")"),

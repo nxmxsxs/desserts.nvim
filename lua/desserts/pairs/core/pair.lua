@@ -28,12 +28,39 @@ ParsedPair.I = {
 -- Would I need a 3rd extmark that spans both open and close pairs? Could be useful for discovering parent pairs...
 --  I might have to FAFO how much performance is impacted
 
+local PairDef = {}
+
+---@class (private) desserts.pairs.PairDef
+---@field parsed_open desserts.pairs.trie.ParsedNode[]
+---@field parsed_close desserts.pairs.trie.ParsedNode[]
+---@field filetypes_pred? fun(...): boolean
+---@field close_pred? fun(...): boolean
+PairDef.O = {}
+
+PairDef.I = {
+	mt = {
+		__index = PairDef.O,
+		__metatable = true,
+	},
+}
+
+---comment
+---@param parsed_open desserts.pairs.trie.ParsedNode[]
+---@param parsed_close desserts.pairs.trie.ParsedNode[]
+function PairDef.I.new(parsed_open, parsed_close)
+	local self = setmetatable({}, PairDef.I.mt)
+	self.parsed_open = parsed_open
+	self.parsed_close = parsed_close
+
+	return self
+end
+
 local Pair = {}
 
 ---@class desserts.pairs.Pair
----@field open any
----@field close any
----@field captures table<string, string>
+---@field open_extmark_id integer
+---@field close_extmark_id? integer
+---@field openclose_extmark_id? integer
 Pair.O = {}
 
 Pair.I = {
@@ -43,9 +70,18 @@ Pair.I = {
 	},
 }
 
+---@param opts {open_extmark_id: integer, close_extmark_id: integer, openclose_extmark_id: integer, captures?: table<string, string>}
+function Pair.I.new(opts)
+	local self = setmetatable({}, Pair.I.mt)
+	self.open_extmark_id = opts.open_extmark_id
+	self.close_extmark_id = opts.close_extmark_id
+	self.openclose_extmark_id = opts.openclose_extmark_id
+	return self
+end
+
 local ParsedNode = {}
 
----@class desserts.util.trie.ParsedNode
+---@class desserts.pairs.trie.ParsedNode
 ParsedNode.O = {}
 
 ParsedNode.I = {
@@ -69,7 +105,7 @@ end
 
 local ParsedCharNode = {}
 
----@class desserts.util.trie.ParsedCharNode: desserts.util.trie.ParsedNode
+---@class desserts.pairs.trie.ParsedCharNode: desserts.pairs.trie.ParsedNode
 ---@field buf string
 ParsedCharNode.O = {}
 
@@ -81,11 +117,13 @@ ParsedCharNode.I = {
 }
 
 function ParsedCharNode.O:extend_node(node)
+	local m_trie = require("desserts.pairs.core.trie")
+
 	for i = 1, #self.buf do
 		local c = self.buf:sub(i, i)
 		local b = string.byte(c)
 		if not node.children[b] then
-			node.children[b] = require("desserts.pairs.core.trie").Node.new()
+			node.children[b] = m_trie.Node.new()
 			node.len = node.len + 1
 		end
 		node = node.children[b]
@@ -108,7 +146,7 @@ end
 
 local ParsedPatNode = {}
 
----@class desserts.util.trie.ParsedPatNode: desserts.util.trie.ParsedNode
+---@class desserts.pairs.trie.ParsedPatNode: desserts.pairs.trie.ParsedNode
 ---@field name string
 ---@field pat vim.lpeg.Pattern
 ParsedPatNode.O = {}
@@ -121,8 +159,10 @@ ParsedPatNode.I = {
 }
 
 function ParsedPatNode.O:extend_node(node)
+	local m_trie = require("desserts.pairs.core.trie")
+
 	if not node.children[node] then
-		local new_node = require("desserts.pairs.core.trie").Node.new()
+		local new_node = m_trie.Node.new()
 		new_node.pat = self.pat
 		node.children[node] = new_node
 	else
@@ -138,7 +178,7 @@ function ParsedPatNode.O:expand(ecx)
 end
 
 ---@param opts { pat: vim.lpeg.Pattern, name: string }
----@return desserts.util.trie.ParsedPatNode
+---@return desserts.pairs.trie.ParsedPatNode
 function ParsedPatNode.I.new(opts)
 	local self = setmetatable({}, ParsedPatNode.I.mt)
 
@@ -151,7 +191,7 @@ end
 local ParsedNodeParts = {}
 
 ---@class (private) desserts.pairs.ParsedNodeParts
----@field parts desserts.util.trie.ParsedNode[]
+---@field parts desserts.pairs.trie.ParsedNode[]
 ParsedNodeParts.O = {}
 
 ---@param opts { defs: table<string, vim.lpeg.Pattern> }
@@ -179,9 +219,17 @@ end
 
 ---@param pair_str string
 ---@param opts { defs: any }
----@return desserts.util.trie.ParsedNode[]
+---@return desserts.pairs.trie.ParsedNode[]
 function M.parse(pair_str, opts)
 	return pair_parser(opts):match(pair_str)
 end
+
+M.Pair = {
+	new = Pair.I.new,
+}
+
+M.PairDef = {
+	new = PairDef.I.new,
+}
 
 return M
