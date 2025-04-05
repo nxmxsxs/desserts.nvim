@@ -25,18 +25,64 @@ function Node.I.new()
 	return self
 end
 
----@param ecx { captures: table<string, string> }
-function Node.O:expand(ecx)
-	if not self.leaf then
-		return nil
+--- ---@param ecx { captures: table<string, string> }
+--- function Node.O:expand(ecx)
+--- 	if not self.leaf then
+--- 		return nil
+--- 	end
+---
+--- 	local out = {}
+--- 	for _, n in ipairs(self.leaf) do
+--- 		table.insert(out, n:expand(ecx))
+--- 	end
+---
+--- 	return table.concat(out, "")
+--- end
+
+---@class (private) desserts.pairs.Node.Ref
+---@field value desserts.pairs.Node
+---@overload fun(): desserts.pairs.Node?
+
+---@return desserts.pairs.Node.Ref
+function Node.O:ref()
+	return setmetatable({ value = self }, {
+		__call = function(o)
+			return o.value
+		end,
+		__mode = "v",
+	})
+end
+
+---@param input string
+---@return desserts.pairs.Node?, {id: string, match: string}?
+function Node.O:match(input)
+	if self.pat then
+		local capture = self.pat:match(input)
+
+		if capture then
+			return self, { id = capture, match = input }
+		end
 	end
 
-	local out = {}
-	for _, n in ipairs(self.leaf) do
-		table.insert(out, n:expand(ecx))
+	local key = input:sub(#input, #input)
+
+	local next_node = self.children[string.byte(key)]
+	if next_node then
+		return next_node, nil
 	end
 
-	return table.concat(out, "")
+	next_node = self.children[self]
+	if not next_node then
+		return nil, nil
+	end
+	assert(next_node.pat)
+
+	local capture = next_node.pat:match(key)
+	if not capture then
+		return nil, nil
+	end
+
+	return next_node, { id = capture, match = input }
 end
 
 local Trie = {}

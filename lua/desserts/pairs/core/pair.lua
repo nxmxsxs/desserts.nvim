@@ -1,14 +1,5 @@
 local M = {}
 
-local lpeg = vim.lpeg
-
-local C = lpeg.C
-local Ct = lpeg.Ct
-local P = lpeg.P
-local R = lpeg.R
-local S = lpeg.S
-local V = lpeg.V
-
 local ParsedPair = {}
 
 ---@class desserts.pairs.ParsedPair
@@ -58,7 +49,7 @@ end
 local Pair = {}
 
 ---@class desserts.pairs.Pair
----@field open_extmark_id integer
+---@field open_extmark_id? integer
 ---@field close_extmark_id? integer
 ---@field openclose_extmark_id? integer
 Pair.O = {}
@@ -97,10 +88,15 @@ function ParsedNode.O:extend_node(node)
 	error("`ParsedNode:extend_node` not implemented")
 end
 
+--- ---@param ecx desserts.pairs.ExpandCtx
+--- ---@return string
+--- function ParsedNode.O:expand(ecx)
+--- 	error("`ParsedNode:expand` not implemented")
+--- end
+
 ---@param ecx desserts.pairs.ExpandCtx
----@return string
-function ParsedNode.O:expand(ecx)
-	error("`ParsedNode:expand` not implemented")
+function ParsedNode.O:add_match(ecx)
+	error("`ParsedNode:add_match` not implemented")
 end
 
 local ParsedCharNode = {}
@@ -131,8 +127,18 @@ function ParsedCharNode.O:extend_node(node)
 	return node
 end
 
-function ParsedCharNode.O:expand(ecx)
-	return self.buf
+-- function ParsedCharNode.O:expand(ecx)
+-- 	return self.buf
+-- end
+
+function ParsedCharNode.O:add_match(ecx)
+	for i = 1, #self.buf do
+		local c = self.buf:sub(i, i)
+
+		ecx.add_match(function(node)
+			return assert(node.children[string.byte(c)]), c
+		end)
+	end
 end
 
 ---@param buf string
@@ -173,8 +179,14 @@ function ParsedPatNode.O:extend_node(node)
 	return node.children[node]
 end
 
-function ParsedPatNode.O:expand(ecx)
-	return ecx.captures[self.name] or ""
+-- function ParsedPatNode.O:expand(ecx)
+-- 	return ecx.captures[self.name] or ""
+-- end
+
+function ParsedPatNode.O:add_match(ecx)
+	ecx.add_match(function(node)
+		return assert(node.children[node]), ecx.capture(self.name) or ""
+	end)
 end
 
 ---@param opts { pat: vim.lpeg.Pattern, name: string }
@@ -196,6 +208,15 @@ ParsedNodeParts.O = {}
 
 ---@param opts { defs: table<string, vim.lpeg.Pattern> }
 local function pair_parser(opts)
+	local lpeg = vim.lpeg
+
+	local C = lpeg.C
+	local Ct = lpeg.Ct
+	local P = lpeg.P
+	local R = lpeg.R
+	local S = lpeg.S
+	local V = lpeg.V
+
   -- stylua: ignore
   return P({
     "config",
@@ -206,6 +227,7 @@ local function pair_parser(opts)
       local pat = opts.defs[name]
       if pat and type(pat) == "userdata" then
         pat = pat / function(capture)
+          -- Snacks.debug.inspect(capture)
           return name
         end
       end

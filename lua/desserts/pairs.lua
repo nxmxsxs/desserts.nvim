@@ -6,34 +6,38 @@ local Pairs = {
 	state = {},
 }
 
-local MatchingCtx = {}
-
----@class MatchingCtx
----@field cursor desserts.pairs.Node
----@field extmark_id integer
----@field matching? string
----@field captures table<string, string>
-MatchingCtx.O = {}
-
-MatchingCtx.I = {
-	mt = {
-		__index = MatchingCtx.O,
-		__metatable = true,
-	},
+local MatchingCtx = {
+	I = {},
+	O = {},
 }
 
----@param opts { cursor: desserts.pairs.Node, extmark_id: integer, matching?: string, captures?: table<string,string> }
-function MatchingCtx.I.new(opts)
-	local self = setmetatable({}, MatchingCtx.I.mt)
+---@class (private) desserts.pairs.MatchingCtx.Match
+---@field node desserts.pairs.Node
+---@field offset { [1]: integer, [2]: integer }
+---@field matching? string
 
-	self.cursor = opts.cursor
+---@class (private) desserts.pairs.MatchingCtx
+---@field root desserts.pairs.Node
+---@field extmark_id integer
+---@field captures table<string, string>
+---@field matches desserts.pairs.MatchingCtx.Match[]
+MatchingCtx.O.__index = {}
+
+---@param opts { root: desserts.pairs.Node, extmark_id: integer, captures?: table<string, string> }
+function MatchingCtx.I.new(opts)
+	local self = setmetatable({}, MatchingCtx.O)
+
+	self.root = opts.root
 	self.extmark_id = opts.extmark_id
-	self.matching = opts.matching
 	self.captures = opts.captures or {}
+	self.matches = {}
 
 	return self
 end
 
+function MatchingCtx.O.__index:cursor()
+	return assert(self.matches[#self.matches]).node
+end
 --- ---@param extmark_id integer
 --- ---@return MatchingCtx
 --- function MatchingCtx.O:clone(extmark_id)
@@ -41,158 +45,126 @@ end
 --- end
 
 ---@param key string
----@return MatchingCtx|nil
-function MatchingCtx.O:peek(key)
-	if self.cursor.pat then
-		local input = self.matching and self.matching .. key or key
-		local captured_id = self.cursor.pat:match(input)
-		if captured_id then
-			self.matching = input
-			self.captures[captured_id] = self.matching
-			-- Snacks.debug.inspect({ captures = self.captures })
+---@return desserts.pairs.MatchingCtx?
+function MatchingCtx.O.__index:advance(key)
+	local curr_match = next(self.matches) and self.matches[#self.matches] or { node = self.root, offset = { 0, 0 } }
 
-			return self
-		elseif not self.matching then
-			-- Snacks.debug.inspect({ not_matching = key, matching_ctx = self })
-			return nil
-		end
-	end
+	local input = curr_match.matching and curr_match.matching .. key or key
+	local next_node, captured = curr_match.node:match(input)
 
-	local next_node = self.cursor.children[string.byte(key)]
-	if next_node then
-		return MatchingCtx.I.new({
-			cursor = next_node,
-			extmark_id = self.extmark_id,
-			captures = self.captures,
-		})
-	end
-
-	next_node = self.cursor.children[self.cursor]
-	if not next_node then
-		-- self.matching = nil
-		-- self.captures = {}
-
-		return nil
-	end
-	assert(next_node.pat)
-
-	local captured_id = next_node.pat:match(key)
-	-- Snacks.debug.inspect({
-	-- 	captured_id = captured_id or "nil",
-	-- 	from = key,
-	-- 	-- ctx = string.format("%p", self),
-	-- 	-- pat = self.cursor.pat or "nil",
-	-- })
-	if not captured_id then
-		return nil
-	end
-
-	-- Snacks.debug.inspect({ captures = { [captured_id] = key } })
-	local next_matching_ctx = MatchingCtx.I.new({
-		cursor = next_node,
-		extmark_id = self.extmark_id,
-		captures = vim.tbl_deep_extend("error", self.captures, { [captured_id] = key }),
-		matching = key,
-	})
-
-	return next_matching_ctx
-end
-
----@param key string
----@return MatchingCtx|nil
-function MatchingCtx.O:advance(key)
-	local next_node, data = (function()
-		if self.cursor.pat then
-			local input = self.matching and self.matching .. key or key
-			local captured_id = self.cursor.pat:match(input)
-			if captured_id then
-				self.matching = input
-				self.captures[captured_id] = self.matching
-				-- Snacks.debug.inspect({ captures = self.captures })
-
-				return self.cursor, nil
-			elseif not self.matching then
-				-- Snacks.debug.inspect({ not_matching = key, matching_ctx = self })
-				return nil, nil
-			end
-		end
-
-		local next_node = self.cursor.children[string.byte(key)]
-		if next_node then
-			return next_node, nil
-		end
-
-		next_node = self.cursor.children[self.cursor]
-		if not next_node then
-			return nil, nil
-		end
-		assert(next_node.pat)
-
-		local captured_id = next_node.pat:match(key)
-		if not captured_id then
-			return nil, nil
-		else
-			return next_node, { matching = key, captures = { [captured_id] = key } }
-		end
-	end)()
-
-	if self.cursor.leaf then
+	if curr_match.node.leaf then
 		if not next_node then
 			return nil
 		end
 
-		return MatchingCtx.I.new({
-			cursor = next_node,
-			extmark_id = self.extmark_id,
-			captures = vim.tbl_deep_extend("error", self.captures, data and data.captures or {}),
-			matching = data and data.matching,
-		})
+		local new_mcx = MatchingCtx.I.new({ root = self.root, extmark_id = -1 })
+		vim.list_extend(new_mcx.matches, self.matches or {})
+		new_mcx.matches[#new_mcx.matches + 1] = {
+			node = next_node,
+			offset = { curr_match.offset[2], curr_match.offset[2] + 1 },
+			matching = captured and captured.match,
+		}
+		if captured then
+			new_mcx.captures[captured.id] = captured.match
+		end
 
-		-- return nil
+		return new_mcx
 	else
 		if not next_node then
-			self.matching = nil
 			self.captures = {}
 
 			return nil
 		end
 
-		self.cursor = next_node
-		if data then
-			self.matching = data.matching
-			local k, v = next(data.captures)
-			self.captures[k] = v
+		if captured then
+			self.captures[captured.id] = captured.match
+		end
+
+		local matching = captured and captured.match
+
+		if curr_match.node == next_node then
+			curr_match.offset[2] = curr_match.offset[2] + 1
+			curr_match.matching = matching
+		else
+			table.insert(self.matches, {
+				node = next_node,
+				offset = { curr_match.offset[2], curr_match.offset[2] + 1 },
+				matching = matching,
+			})
 		end
 
 		return self
 	end
 end
 
-function MatchingCtx.O:expand()
-	return self.cursor:expand({ captures = self.captures })
+-- function MatchingCtx.O:expand()
+-- 	return self:cursor():expand({ captures = self.captures })
+-- end
+
+---@return desserts.pairs.ExpandCtx
+function MatchingCtx.O.__index:ecx()
+	local node = self.root
+	local i = 0
+	local out = {}
+
+	---@class (private) desserts.pairs.ExpandCtx
+	local ecx = {
+		---@param cb fun(node: desserts.pairs.Node): desserts.pairs.Node, string
+		add_match = function(cb)
+			local next_node, s = cb(node)
+			node = next_node
+
+			local next_i = i + #s
+			local offset = { i, next_i }
+			i = next_i
+
+			self.matches[#self.matches + 1] = { node = next_node, offset = offset, matching = s }
+			out[#out + 1] = s
+		end,
+
+		---@param k string
+		---@return string?
+		capture = function(k)
+			return self.captures[k]
+		end,
+
+		expanded = function()
+			return table.concat(out, "")
+		end,
+	}
+
+	return ecx
 end
 
-local State = {}
+---@param leaf desserts.pairs.trie.ParsedNode[]
+---@return string
+function MatchingCtx.O.__index:expand(leaf)
+	local ecx = self:ecx()
+
+	for _, i in ipairs(leaf) do
+		i:add_match(ecx)
+	end
+
+	return ecx.expanded()
+end
+
+local State = {
+	I = {},
+	O = {},
+}
 
 ---@class desserts.pairs.State
 ---@field open_trie desserts.pairs.Trie
 ---@field close_trie desserts.pairs.Trie
 ---@field leaves_map table<desserts.pairs.Node, desserts.pairs.Node>
 ---@field bufstate table<integer, desserts.pairs.BufState>
-State.O = {}
-
-State.I = {
-	mt = {
-		__index = State.O,
-		__metatable = true,
-	},
-}
+State.O.__index = {}
 
 function State.I.new()
 	local m_trie = require("desserts.pairs.core.trie")
 	local m_config = require("desserts.pairs.config")
 
-	local self = setmetatable({}, State.I.mt)
+	local self = setmetatable({}, State.O)
 	self.open_trie = m_trie.new()
 	self.close_trie = m_trie.new()
 	self.leaves_map = {}
@@ -210,40 +182,34 @@ function State.I.new()
 	return self
 end
 
-local BufState = {}
+local BufState = {
+	I = {},
+	O = {},
+}
 
 ---@class (private) desserts.pairs.BufState
 ---@field pairs table<integer, desserts.pairs.Pair>
----@field matchers { open: table<integer, MatchingCtx>, close: table<integer, MatchingCtx> }
+---@field matchers { open: table<integer, desserts.pairs.MatchingCtx>, close: table<integer, desserts.pairs.MatchingCtx> }
 ---@field pending desserts.pairs.PendingPairState
-BufState.O = {}
+BufState.O.__index = {}
 
-BufState.I = {
-	mt = {
-		__index = BufState.O,
-	},
+local PendingPairState = {
+	I = {},
+	O = {},
 }
-
-local PendingPairState = {}
 
 ---@class (private) desserts.pairs.PendingPairState
 ---@field open_tree desserts.util.RBTree
 ---@field close_tree desserts.util.RBTree
 ---@field buf integer
 ---@field ns integer
-PendingPairState.O = {}
-
-PendingPairState.I = {
-	mt = {
-		__index = PendingPairState.O,
-	},
-}
+PendingPairState.O.__index = {}
 
 ---@param opts {buf: integer, ns: integer}
 function PendingPairState.I.new(opts)
 	local m_rbtree = require("desserts.util.rbtree")
 
-	local o = setmetatable({}, PendingPairState.I.mt)
+	local o = setmetatable({}, PendingPairState.O)
 
 	o.buf = opts.buf
 	o.ns = opts.ns
@@ -255,34 +221,34 @@ end
 
 ---@param opts {buf: integer, ns: integer}
 function BufState.I.new(opts)
-	local self = setmetatable({}, BufState.I.mt)
+	local self = setmetatable({}, BufState.O)
 	self.matchers = { open = {}, close = {} }
 	self.pairs = {}
 	self.pending = PendingPairState.I.new(opts)
 	return self
 end
 
-PendingPairState.NodeKey = {}
+local PendingPairStateNodeKey = {
+	I = {},
+	O = {},
+}
 
 ---@class PendingPairState.NodeKey: desserts.util.RBNodeKey
 ---@field buf integer
 ---@field ns integer
 ---@field extmark_id integer
-PendingPairState.NodeKey.O = {}
+PendingPairStateNodeKey.O.__index = {}
 
-PendingPairState.NodeKey.I = {
-	mt = {
-		__index = PendingPairState.NodeKey.O,
-	},
-}
-
----NOTE: Code no good, Code Bad, Very Bad
 ---@param a PendingPairState.NodeKey
 ---@param b PendingPairState.NodeKey
 ---@return -1|0|1
-function PendingPairState.NodeKey.I.cmp(a, b)
+function PendingPairStateNodeKey.I.cmp(a, b)
 	assert(a.buf == b.buf)
 	assert(a.ns == b.ns)
+
+	if a.extmark_id == b.extmark_id then
+		return 0
+	end
 
 	local a_mark = vim.api.nvim_buf_get_extmark_by_id(a.buf, a.ns, a.extmark_id, {
 		details = true,
@@ -315,30 +281,30 @@ end
 ---@param a PendingPairState.NodeKey
 ---@param b PendingPairState.NodeKey
 ---@return boolean
-function PendingPairState.NodeKey.I.mt.__eq(a, b)
-	return PendingPairState.NodeKey.I.cmp(a, b) == 0
+function PendingPairStateNodeKey.O.__eq(a, b)
+	return PendingPairStateNodeKey.I.cmp(a, b) == 0
 end
 
 ---@param a PendingPairState.NodeKey
 ---@param b PendingPairState.NodeKey
 ---@return boolean
-function PendingPairState.NodeKey.I.mt.__lt(a, b)
-	return PendingPairState.NodeKey.I.cmp(a, b) == -1
+function PendingPairStateNodeKey.O.__lt(a, b)
+	return PendingPairStateNodeKey.I.cmp(a, b) == -1
 end
 
 ---@param a PendingPairState.NodeKey
 ---@param b PendingPairState.NodeKey
 ---@return boolean
-function PendingPairState.NodeKey.I.mt.__le(a, b)
-	local cmp = PendingPairState.NodeKey.I.cmp(a, b)
+function PendingPairStateNodeKey.O.__le(a, b)
+	local cmp = PendingPairStateNodeKey.I.cmp(a, b)
 
 	return cmp == -1 or cmp == 0
 end
 
 ---@param extmark_id integer
 ---@return PendingPairState.NodeKey
-function PendingPairState.O:node_key(extmark_id)
-	local o = setmetatable({}, PendingPairState.NodeKey.I.mt)
+function PendingPairState.O.__index:node_key(extmark_id)
+	local o = setmetatable({}, PendingPairStateNodeKey.O)
 	o.buf = self.buf
 	o.ns = self.ns
 	o.extmark_id = extmark_id
@@ -347,13 +313,13 @@ function PendingPairState.O:node_key(extmark_id)
 end
 
 ---@param emid integer
-function PendingPairState.O:open_insert(emid)
+function PendingPairState.O.__index:open_insert(emid)
 	self.open_tree:insert(self:node_key(emid))
 end
 
 ---@param s_key_em vim.api.keyset.get_extmark_item_by_id
 ---@return fun(node_key: PendingPairState.NodeKey): -1|0|1
-function PendingPairState.NodeKey.I.extmark_cmp(s_key_em)
+function PendingPairStateNodeKey.I.extmark_cmp(s_key_em)
 	return function(node_key)
 		local node_key_em =
 			vim.api.nvim_buf_get_extmark_by_id(node_key.buf, node_key.ns, node_key.extmark_id, { details = true })
@@ -380,19 +346,28 @@ function PendingPairState.NodeKey.I.extmark_cmp(s_key_em)
 	end
 end
 
----@param s_key PendingPairState.NodeKey
-function PendingPairState.O:open_delete_by_key(s_key)
+---@param open_extmark_id integer
+function PendingPairState.O.__index:open_delete(open_extmark_id)
 	---@type table<integer, vim.api.keyset.get_extmark_item_by_id>
 	local cache = {}
 
-	local s_key_em = vim.api.nvim_buf_get_extmark_by_id(s_key.buf, s_key.ns, s_key.extmark_id, { details = true })
-	self.open_tree:delete_with(PendingPairState.NodeKey.I.extmark_cmp(s_key_em))
+	local s_key_em = vim.api.nvim_buf_get_extmark_by_id(self.buf, self.ns, open_extmark_id, { details = true })
+	self.open_tree:delete_with(
+		---@param node_key PendingPairState.NodeKey
+		function(node_key)
+			if open_extmark_id == node_key.extmark_id then
+				return 0
+			end
+
+			return PendingPairStateNodeKey.I.extmark_cmp(s_key_em)(node_key)
+		end
+	)
 end
 
 ---@param row integer
 ---@param col integer
 ---@return fun(key: PendingPairState.NodeKey): -1|0|1
-function PendingPairState.NodeKey.I.row_col_cmp(row, col)
+function PendingPairStateNodeKey.I.row_col_cmp(row, col)
 	return function(key)
 		local key_em = vim.api.nvim_buf_get_extmark_by_id(key.buf, key.ns, key.extmark_id, {})
 
@@ -414,15 +389,15 @@ end
 ---@param row integer
 ---@param col integer
 ---@return PendingPairState.NodeKey[]
-function PendingPairState.O:open_node_keys_le(row, col)
+function PendingPairState.O.__index:open_node_keys_le(row, col)
 	---@type table<integer, vim.api.keyset.get_extmark_item_by_id>
 	local cache = {}
 
-	return self.open_tree:node_keys_le(PendingPairState.NodeKey.I.row_col_cmp(row, col))
+	return self.open_tree:node_keys_le(PendingPairStateNodeKey.I.row_col_cmp(row, col))
 end
 
 ---@param emid integer
-function PendingPairState.O:close_insert(emid)
+function PendingPairState.O.__index:close_insert(emid)
 	self.close_tree:insert(self:node_key(emid))
 end
 
@@ -430,75 +405,90 @@ end
 ---@param row integer
 ---@param col integer
 ---@return PendingPairState.NodeKey[]
-function PendingPairState.O:close_node_keys_gt(row, col)
+function PendingPairState.O.__index:close_node_keys_gt(row, col)
 	---@type table<integer, vim.api.keyset.get_extmark_item_by_id>
 	local cache = {}
 
-	return self.close_tree:node_keys_gt(PendingPairState.NodeKey.I.row_col_cmp(row, col))
+	return self.close_tree:node_keys_gt(PendingPairStateNodeKey.I.row_col_cmp(row, col))
 end
 
----@param s_key PendingPairState.NodeKey
-function PendingPairState.O:close_delete_by_key(s_key)
+---@param close_extmark_id integer
+function PendingPairState.O.__index:close_delete(close_extmark_id)
 	---@type table<integer, vim.api.keyset.get_extmark_item_by_id>
 	local cache = {}
 
-	local s_key_em = vim.api.nvim_buf_get_extmark_by_id(s_key.buf, s_key.ns, s_key.extmark_id, { details = true })
-	self.close_tree:delete_with(PendingPairState.NodeKey.I.extmark_cmp(s_key_em))
-end
+	local s_key_em = vim.api.nvim_buf_get_extmark_by_id(self.buf, self.ns, close_extmark_id, { details = true })
 
-function State.O:on_backspace(buf, win)
-	local row, col = unpack(vim.api.nvim_win_get_cursor(win))
-	local state = assert(self.bufstate[buf])
-
-	local marks = vim.iter(vim.api.nvim_buf_get_extmarks(buf, M.NS, { row - 1, col - 1 }, { row - 1, col - 1 }, {
-		details = true,
-		overlap = true,
-	})):fold(
-		{
-			---@type vim.api.keyset.get_extmark_item[]
-			open = {},
-			---@type vim.api.keyset.get_extmark_item[]
-			openclose = {},
-			---@type vim.api.keyset.get_extmark_item[]
-			close = {},
-		},
-		---@param m vim.api.keyset.get_extmark_item
-		function(acc, m)
-			local p = state.pairs[m[1]]
-
-			if m[1] == p.open_extmark_id then
-				table.insert(acc.open, m)
-			elseif m[1] == p.close_extmark_id then
-				table.insert(acc.close, m)
-			elseif m[1] == p.openclose_extmark_id then
-				table.insert(acc.openclose, m)
-			else
-				error("skill_issue!()")
+	self.close_tree:delete_with(
+		---@param node_key PendingPairState.NodeKey
+		function(node_key)
+			if close_extmark_id == node_key.extmark_id then
+				return 0
 			end
 
-			return acc
+			return PendingPairStateNodeKey.I.extmark_cmp(s_key_em)(node_key)
 		end
 	)
+end
 
-	local cm = marks.close[#marks.close]
-	local om = marks.open[#marks.open]
-	-- Snacks.debug.inspect({ om = om or "nil" })
+function State.O.__index:on_backspace(buf, win, icx)
+	local row, col = icx.row, icx.col
+	local state = assert(self.bufstate[buf])
+
+	local cm = icx.marks.close[#icx.marks.close]
+	local om = icx.marks.open[#icx.marks.open]
+	-- Snacks.debug.inspect({
+	-- 	om = om or "nil",
+	-- 	cm = cm or "nil",
+	-- 	row = row - 1,
+	-- 	col = col,
+	-- })
 	if cm then
-		if cm[4].end_col - cm[3] == 1 then
-			local open_pair = state.pairs[cm[1]]
-			Snacks.debug.inspect({ new_broken_open = true })
-			state.pending:open_insert(open_pair.open_extmark_id)
+		if cm[2] == cm[4].end_row and cm[4].end_col - cm[3] == 1 then
+			local pair = state.pairs[cm[1]]
+
+			assert(cm[1] == pair.close_extmark_id)
+
+			state.pending:close_delete(pair.close_extmark_id)
+			vim.api.nvim_buf_del_extmark(buf, M.NS, pair.close_extmark_id)
+			state.pairs[assert(pair.close_extmark_id)] = nil
+			state.matchers.close[pair.close_extmark_id] = nil
+			pair.close_extmark_id = nil
+
+			if pair.openclose_extmark_id then
+				vim.api.nvim_buf_del_extmark(buf, M.NS, pair.openclose_extmark_id)
+				state.pairs[pair.openclose_extmark_id] = nil
+				pair.openclose_extmark_id = nil
+			end
+
+			if pair.open_extmark_id then
+				Snacks.debug.inspect({ new_broken_open = true, pair = pair })
+
+				state.pending:open_insert(pair.open_extmark_id)
+			end
 		end
 	elseif om then
-		if om[4].end_col - om[3] == 1 then
+		if om[2] == om[4].end_row and om[4].end_col - om[3] == 1 then
 			local pair = state.pairs[om[1]]
+
+			assert(om[1] == pair.open_extmark_id)
+
+			state.pending:open_delete(pair.open_extmark_id)
+			vim.api.nvim_buf_del_extmark(buf, M.NS, pair.open_extmark_id)
+			state.pairs[pair.open_extmark_id] = nil
+			state.matchers.open[pair.open_extmark_id] = nil
+			pair.open_extmark_id = nil
+
+			if pair.openclose_extmark_id then
+				vim.api.nvim_buf_del_extmark(buf, M.NS, pair.openclose_extmark_id)
+				state.pairs[pair.openclose_extmark_id] = nil
+				pair.openclose_extmark_id = nil
+			end
+
 			if pair.close_extmark_id then
 				Snacks.debug.inspect({ new_broken_close = true, pair = pair })
 
 				state.pending:close_insert(pair.close_extmark_id)
-
-				state.pairs[pair.open_extmark_id] = nil
-				pair.open_extmark_id = -1
 			end
 		end
 	end
@@ -506,84 +496,17 @@ function State.O:on_backspace(buf, win)
 	return
 end
 
-function State.O:on_insert(key, typed, buf, win)
-	local row, col = unpack(vim.api.nvim_win_get_cursor(win))
+function State.O.__index:on_insert(key, typed, buf, win, icx)
+	local row, col = icx.row, icx.col
 	local state = assert(self.bufstate[buf])
 
-	local marks = vim.iter(vim.api.nvim_buf_get_extmarks(buf, M.NS, { row - 1, col - 1 }, { row - 1, col - 1 }, {
-		details = true,
-		overlap = true,
-	})):fold(
-		{
-			---@type vim.api.keyset.get_extmark_item[]
-			open = {},
-			---@type vim.api.keyset.get_extmark_item[]
-			openclose = {},
-			---@type vim.api.keyset.get_extmark_item[]
-			close = {},
-		},
-		---@param m vim.api.keyset.get_extmark_item
-		function(acc, m)
-			local p = state.pairs[m[1]]
+	-- Snacks.debug.inspect({ key = key, typed = typed })
 
-			if m[1] == p.open_extmark_id then
-				table.insert(acc.open, m)
-			elseif m[1] == p.close_extmark_id then
-				table.insert(acc.close, m)
-			elseif m[1] == p.openclose_extmark_id then
-				table.insert(acc.openclose, m)
-			else
-				error("skill_issue!()")
-			end
-
-			return acc
-		end
-	)
-
-	-- Snacks.debug.inspect({ marks = marks or "nil", row = row - 1, col = col })
-
-	local lookahead, surr_close_mark, surr_openclose_mark = (function()
-		if next(marks.openclose) then
-			local surr_openclose_mark = vim.iter(marks.openclose):rev():find(
-				---@param m vim.api.keyset.get_extmark_item
-				function(m)
-					return m[2] <= row - 1 and row - 1 <= m[4].end_row and m[3] <= col and col < m[4].end_col
-				end
-			) --[[@as vim.api.keyset.get_extmark_item?]]
-
-			if not surr_openclose_mark then
-				return false, nil
-			end
-
-			local surr_close_mark = vim.api.nvim_buf_get_extmark_by_id(
-				buf,
-				M.NS,
-				state.pairs[surr_openclose_mark[1]].close_extmark_id,
-				{ details = true }
-			)
-			local close_text = surr_close_mark[1] == surr_close_mark[3].end_row
-				and surr_close_mark[3].end_col - surr_close_mark[2] == 1
-				and vim.api.nvim_buf_get_text(
-					buf,
-					surr_close_mark[1],
-					surr_close_mark[2],
-					surr_close_mark[3].end_row,
-					surr_close_mark[3].end_col,
-					{}
-				)[1]
-			-- Snacks.debug.inspect({ close_text = close_text })
-
-			return close_text == key, surr_close_mark, surr_openclose_mark
-		else
-			return false, nil
-		end
-	end)()
-
-	local curr_open_matching_ctx, next_open_matching_ctx, curr_open_extmark = (function()
-		local curr_open_extmark = marks.open[#marks.open]
+	local curr_open_matching_ctx, curr_open_extmark, curr_open_advance_cursor = (function()
+		local curr_open_extmark = icx.marks.open[#icx.marks.open]
 		if curr_open_extmark then
 			local curr_open_matching_ctx = state.matchers.open[curr_open_extmark[1]]
-			local next_open_matching_ctx = curr_open_matching_ctx:advance(key)
+			local next_open_matching_ctx = curr_open_matching_ctx:advance(typed)
 
 			if next_open_matching_ctx then
 				if curr_open_matching_ctx ~= next_open_matching_ctx then
@@ -601,20 +524,49 @@ function State.O:on_insert(key, typed, buf, win)
 					state.matchers.open[next_open_matching_ctx.extmark_id] = next_open_matching_ctx
 				end
 
-				return curr_open_matching_ctx, next_open_matching_ctx, curr_open_extmark
+				if curr_open_matching_ctx:cursor().leaf then
+					curr_open_matching_ctx = next_open_matching_ctx
+				end
+
+				return curr_open_matching_ctx,
+					curr_open_extmark,
+					vim.api.nvim_buf_get_text(buf, row - 1, col, row - 1, col + 1, {})[1] == typed
 			end
 		end
 
+		-- Snacks.debug.inspect({
+		-- 	-- surr_close_mark = surr_close_mark or "nil",
+		-- 	-- surr_openclose_mark = surr_openclose_mark or "nil",
+		-- 	close_text = close_text or "nil",
+		-- 	key = key,
+		-- 	curr_open_lookahead = curr_open_lookahead,
+		-- 	marks_openclose = marks.openclose,
+		-- 	-- curr_open_matching_ctx = curr_open_matching_ctx or "nil",
+		-- 	-- curr_close_matching_ctx = curr_close_matching_ctx or "nil",
+		-- 	row = row - 1,
+		-- 	col = col,
+		-- })
+
+		local curr_open_lookahead = (function()
+			if not next(icx.marks.lookahead_close) then
+				return false
+			end
+
+			-- if next chaaracter is a lookahead key -> open,close char is the same, then don't start a new match
+			local curr_lookahead_close_mark = icx.marks.lookahead_close[#icx.marks.lookahead_close]
+			return curr_lookahead_close_mark[1] == row - 1 and curr_lookahead_close_mark[2] == col
+		end)()
+		if curr_open_lookahead then
+			return nil, nil, false
+		end
+
 		local new_open_matching_ctx = MatchingCtx.I.new({
-			cursor = self.open_trie.root,
+			root = self.open_trie.root,
 			extmark_id = -1,
 		})
-		local next_open_matching_ctx = new_open_matching_ctx:advance(key)
+
+		local next_open_matching_ctx = new_open_matching_ctx:advance(typed)
 		if next_open_matching_ctx then
-			-- Snacks.debug.inspect({
-			-- 	new_open_matching_ctx = new_open_matching_ctx,
-			-- 	next_open_matching_ctx = next_open_matching_ctx,
-			-- })
 			new_open_matching_ctx.extmark_id = vim.api.nvim_buf_set_extmark(buf, M.NS, row - 1, col, {
 				end_row = row - 1,
 				end_col = col,
@@ -628,22 +580,111 @@ function State.O:on_insert(key, typed, buf, win)
 			})
 
 			return new_open_matching_ctx,
-				next_open_matching_ctx,
 				{
 					new_open_matching_ctx.extmark_id,
 					row - 1,
 					col,
 					{ end_row = row - 1, end_col = col, right_gravity = true, ns_id = M.NS },
-				}
+				},
+				false
 		end
 	end)()
 
-	if next_open_matching_ctx and curr_open_matching_ctx.cursor.leaf then
-		curr_open_matching_ctx = next_open_matching_ctx
-	end
+	local curr_close_matching_ctx, next_close_matching_ctx, curr_close_extmark = (function()
+		local curr_close_extmark = icx.marks.close[#icx.marks.close]
+		if curr_close_extmark then
+			local curr_close_matching_ctx = state.matchers.close[curr_close_extmark[1]]
+			local next_close_matching_ctx = curr_close_matching_ctx:advance(typed)
+
+			if next_close_matching_ctx then
+				return curr_close_matching_ctx, next_close_matching_ctx, curr_close_extmark
+			end
+		else
+			local new_close_matching_ctx = MatchingCtx.I.new({ root = self.close_trie.root, extmark_id = -1 })
+			local next_close_matching_ctx = new_close_matching_ctx:advance(typed)
+
+			if next_close_matching_ctx then
+				new_close_matching_ctx.extmark_id = vim.api.nvim_buf_set_extmark(buf, M.NS, row - 1, col, {
+					end_row = row - 1,
+					end_col = col,
+					undo_restore = false,
+					invalidate = true,
+				})
+				state.matchers.close[new_close_matching_ctx.extmark_id] = new_close_matching_ctx
+				state.pairs[new_close_matching_ctx.extmark_id] = require("desserts.pairs.core.pair").Pair.new({
+					close_extmark_id = new_close_matching_ctx.extmark_id,
+				})
+
+				return new_close_matching_ctx,
+					next_close_matching_ctx,
+					{
+						new_close_matching_ctx.extmark_id,
+						row - 1,
+						col,
+						{ end_row = row - 1, end_col = col, right_gravity = true, ns_id = M.NS },
+					}
+			end
+		end
+	end)()
+
+	-- Snacks.debug.inspect({
+	-- 	surr_close_mark = surr_close_mark or "nil",
+	-- 	curr_open_matching_ctx = curr_open_matching_ctx or "nil",
+	-- 	curr_close_matching_ctx = curr_close_matching_ctx or "nil",
+	-- 	row = row - 1,
+	-- 	col = col,
+	-- })
 
 	if curr_open_matching_ctx then
-		-- Snacks.debug.inspect({ lookahead = lookahead, surr_close_mark = surr_close_mark })
+		curr_open_extmark = assert(curr_open_extmark)
+
+		local curr_cursor = curr_open_matching_ctx:cursor()
+		local leaf = curr_cursor.leaf
+
+		if leaf then
+			for _, cnk in ipairs(state.pending:close_node_keys_gt(row - 1, col - 1)) do
+				local cmcx = state.matchers.close[cnk.extmark_id]
+				-- TODO: closing cursor might not be a leaf???
+				if self.leaves_map[curr_cursor] == cmcx:cursor() then
+					vim.api.nvim_put({ typed }, "c", false, true)
+					vim.api.nvim_buf_set_extmark(buf, M.NS, curr_open_extmark[2], curr_open_extmark[3], {
+						id = curr_open_extmark[1],
+						end_row = curr_open_extmark[4].end_row,
+						end_col = curr_open_extmark[4].end_col + 1,
+					})
+					curr_open_extmark[4].end_col = curr_open_extmark[4].end_col + 1
+
+					state.pending:close_delete(cnk.extmark_id)
+
+					-- NOTE: update open pair, etc...
+					local pair = state.pairs[cnk.extmark_id]
+
+					pair.open_extmark_id = curr_open_matching_ctx.extmark_id
+					state.pairs[curr_open_matching_ctx.extmark_id] = pair
+
+					local re_close_extmark =
+						vim.api.nvim_buf_get_extmark_by_id(buf, M.NS, cnk.extmark_id, { details = true })
+
+					pair.openclose_extmark_id =
+						vim.api.nvim_buf_set_extmark(buf, M.NS, curr_open_extmark[2], curr_open_extmark[3], {
+							end_row = re_close_extmark[3].end_row,
+							end_col = re_close_extmark[3].end_col,
+							invalidate = true,
+							undo_restore = false,
+						})
+					state.pairs[pair.openclose_extmark_id] = pair
+
+					Snacks.debug.inspect({
+						close_u_complete_me = true,
+						pair = pair,
+						curr_open_extmark = curr_open_extmark,
+						re_close_extmark = re_close_extmark,
+					})
+
+					return ""
+				end
+			end
+		end
 
 		-- Snacks.debug.inspect({
 		-- 	curr_open_matching_ctx = curr_open_matching_ctx or "nil",
@@ -651,60 +692,10 @@ function State.O:on_insert(key, typed, buf, win)
 		-- 	-- curr_open_extmark = curr_open_extmark or "nil",
 		-- })
 
-		if curr_open_matching_ctx.cursor.leaf then
-			for _, cnk in ipairs(state.pending:close_node_keys_gt(row - 1, col - 1)) do
-				local cmcx = state.matchers.close[cnk.extmark_id]
-        -- TODO: closing cursor might not be a leaf???
-				if self.leaves_map[curr_open_matching_ctx.cursor] == cmcx.cursor then
-					vim.api.nvim_put({ key }, "c", false, true)
-					vim.api.nvim_buf_set_extmark(buf, M.NS, curr_open_extmark[2], curr_open_extmark[3], {
-						id = curr_open_extmark[1],
-						end_row = curr_open_extmark[4].end_row,
-						end_col = curr_open_extmark[4].end_col + 1,
-					})
-
-					state.pending:close_delete_by_key(cnk)
-
-					-- NOTE: update open pair, etc...
-					local pair = state.pairs[cnk.extmark_id]
-					Snacks.debug.inspect({ close_u_complete_me = true, pair = pair })
-
-					pair.open_extmark_id = curr_open_matching_ctx.extmark_id
-					state.pairs[curr_open_matching_ctx.extmark_id] = pair
-
-					return ""
-				end
-			end
-		end
-
-		-- elseif close_cur then
-		-- 	local open_node_keys = state.pending:open_node_keys_le(row - 1, col - 1)
-		-- 	-- Snacks.debug.inspect(node_keys)
-		-- 	for _, onk in ipairs(open_node_keys) do
-		-- 		local mcx = state.matchers.open[onk.extmark_id]
-		-- 		local expanded = mcx:expand()
-		-- 		if expanded == key then
-		-- 			vim.api.nvim_put({ key }, "c", false, true)
-		--
-		-- 			state.pending:open_delete_by_key(onk)
-		-- 			Snacks.debug.inspect({ open_u_complete_me = true })
-		--
-		-- 			-- NOTE: update close pair, etc...
-		--
-		-- 			return ""
-		-- 		end
-		-- 	end
-		--
-		-- 	return
-		-- end
-
-		if lookahead then
-			surr_close_mark = assert(surr_close_mark)
-
-			-- mark pos are (0-0) indexed, win pos are (1-0) indexed
-			vim.api.nvim_win_set_cursor(win, { surr_close_mark[3].end_row + 1, surr_close_mark[3].end_col })
+		if curr_open_advance_cursor then
+			vim.api.nvim_win_set_cursor(win, { row, col + 1 })
 		else
-			vim.api.nvim_put({ key }, "c", false, true)
+			vim.api.nvim_put({ typed }, "c", false, true)
 		end
 
 		vim.api.nvim_buf_set_extmark(buf, M.NS, curr_open_extmark[2], curr_open_extmark[3], {
@@ -712,22 +703,26 @@ function State.O:on_insert(key, typed, buf, win)
 			end_row = curr_open_extmark[4].end_row,
 			end_col = curr_open_extmark[4].end_col + 1,
 		})
+		curr_open_extmark[4].end_col = curr_open_extmark[4].end_col + 1
 
-		local expanded = curr_open_matching_ctx:expand()
-		if expanded then
-			local p = state.pairs[curr_open_matching_ctx.extmark_id]
-
-			vim.api.nvim_put({ expanded }, "b", false, false)
-
+		if leaf then
 			local close_matching_ctx = MatchingCtx.I.new({
-				cursor = assert(self.leaves_map[curr_open_matching_ctx.cursor]),
-				extmark_id = vim.api.nvim_buf_set_extmark(buf, M.NS, row - 1, col + 1, {
-					end_row = row - 1,
-					end_col = col + 1 + #expanded,
-					invalidate = true,
-					undo_restore = false,
-				}),
+				root = self.close_trie.root,
+				extmark_id = -1,
+				captures = curr_open_matching_ctx.captures,
 			})
+			local expanded = close_matching_ctx:expand(leaf)
+			-- vim.api.nvim_feedkeys("\003u", "m", true)
+			-- vim.api.nvim_feedkeys("<C-g>u", "n", false)
+			vim.api.nvim_put({ expanded }, "b", false, false)
+			close_matching_ctx.extmark_id = vim.api.nvim_buf_set_extmark(buf, M.NS, row - 1, col + 1, {
+				end_row = row - 1,
+				end_col = col + 1 + #expanded,
+				invalidate = true,
+				undo_restore = false,
+			})
+
+			local p = state.pairs[curr_open_matching_ctx.extmark_id]
 
 			state.matchers.close[close_matching_ctx.extmark_id] = close_matching_ctx
 			p.close_extmark_id = close_matching_ctx.extmark_id
@@ -743,6 +738,68 @@ function State.O:on_insert(key, typed, buf, win)
 			p.openclose_extmark_id = openclose_extmark_id
 			state.pairs[openclose_extmark_id] = p
 		end
+
+		return ""
+	end
+
+	if curr_close_matching_ctx then
+		curr_close_extmark = assert(curr_close_extmark)
+
+		if curr_close_matching_ctx:cursor().leaf then
+			for _, onk in ipairs(state.pending:open_node_keys_le(row - 1, col - 1)) do
+				local omcx = state.matchers.open[onk.extmark_id]
+				if self.leaves_map[curr_close_matching_ctx:cursor()] == omcx:cursor() then
+					vim.api.nvim_put({ typed }, "c", false, true)
+					vim.api.nvim_buf_set_extmark(buf, M.NS, curr_close_extmark[2], curr_close_extmark[3], {
+						id = curr_close_extmark[1],
+						end_row = curr_close_extmark[4].end_row,
+						end_col = curr_close_extmark[4].end_col + 1,
+					})
+					curr_close_extmark[4].end_col = curr_close_extmark[4].end_col + 1
+
+					state.pending:open_delete(onk.extmark_id)
+
+					-- NOTE: update close pair, etc...
+					local pair = state.pairs[onk.extmark_id]
+
+					pair.close_extmark_id = curr_close_matching_ctx.extmark_id
+					state.pairs[curr_close_matching_ctx.extmark_id] = pair
+
+					local renew_open_extmark =
+						vim.api.nvim_buf_get_extmark_by_id(buf, M.NS, onk.extmark_id, { details = true })
+					pair.openclose_extmark_id =
+						vim.api.nvim_buf_set_extmark(buf, M.NS, renew_open_extmark[1], renew_open_extmark[2], {
+							end_row = curr_close_extmark[4].end_row,
+							end_col = curr_close_extmark[4].end_col,
+							invalidate = true,
+							undo_restore = false,
+						})
+					state.pairs[pair.openclose_extmark_id] = pair
+
+					Snacks.debug.inspect({
+						open_u_complete_me = true,
+						pair = pair,
+						renew_open_extmark = renew_open_extmark,
+						curr_close_extmark = curr_close_extmark,
+					})
+
+					return ""
+				end
+			end
+		end
+	end
+
+	if next(icx.marks.lookahead_close) then
+		local curr_lookahead_close_mark = icx.marks.lookahead_close[#icx.marks.lookahead_close]
+		-- Snacks.debug.inspect({
+		-- 	marks_lookahead_close = marks.lookahead_close,
+		-- })
+
+		-- mark pos are (0-0) indexed, win pos are (1-0) indexed
+		vim.api.nvim_win_set_cursor(
+			win,
+			{ curr_lookahead_close_mark[3].end_row + 1, curr_lookahead_close_mark[3].end_col }
+		)
 
 		return ""
 	end
@@ -776,16 +833,28 @@ function M.setup(opts)
 		-- end
 		-- Snacks.debug.inspect(r)
 
-		local row, col = unpack(vim.api.nvim_win_get_cursor(0))
-		local marks = vim.api.nvim_buf_get_extmarks(0, M.NS, { row - 1, col }, { row - 1, col }, {
+		local win = vim.api.nvim_get_current_win()
+		local buf = vim.api.nvim_win_get_buf(win)
+		local row, col = unpack(vim.api.nvim_win_get_cursor(win))
+		local marks = vim.api.nvim_buf_get_extmarks(buf, M.NS, { row - 1, col }, { row - 1, col }, {
 			details = true,
 			-- limit = 1,
 			overlap = true,
 		})
-		Snacks.debug.inspect({ marks = marks or "nil", row = row - 1, col = col })
+		Snacks.debug.inspect({
+			marks = marks or "nil",
+			row = row - 1,
+			col = col,
+			win = win,
+			buf = buf,
+		})
 	end)
 
 	vim.on_key(function(key, typed)
+		if typed == "" then
+			return
+		end
+
 		local mode = vim.api.nvim_get_mode().mode
 		if mode ~= "i" then
 			return
@@ -864,18 +933,98 @@ function M.setup(opts)
 			})
 		end
 
-		if key == vim.keycode("<BS>") then
-			return s:on_backspace(buf, win)
-		elseif key == vim.keycode("<Del>") then
+		local row, col = unpack(vim.api.nvim_win_get_cursor(win))
+		local state = s.bufstate[buf]
+
+		local marks = vim.iter(vim.api.nvim_buf_get_extmarks(buf, M.NS, { row - 1, col - 1 }, { row - 1, col - 1 }, {
+			details = true,
+			overlap = true,
+		})):fold(
+			{
+				---@type vim.api.keyset.get_extmark_item[]
+				open = {},
+				---@type vim.api.keyset.get_extmark_item[]
+				openclose = {},
+				---@type vim.api.keyset.get_extmark_item[]
+				close = {},
+				---@type vim.api.keyset.get_extmark_item_by_id[]
+				lookahead_close = {},
+			},
+			---@param m vim.api.keyset.get_extmark_item
+			function(acc, m)
+				-- `nvim_buf_get_extmarks` also includes marks on the upper bound (exclusive) which we dont want
+				local p = state.pairs[m[1]]
+
+				if m[1] == p.open_extmark_id then
+					if (col - 1) < m[4].end_col then
+						table.insert(acc.open, m)
+					end
+				elseif m[1] == p.close_extmark_id then
+					if (col - 1) < m[4].end_col then
+						table.insert(acc.close, m)
+					end
+				elseif m[1] == p.openclose_extmark_id then
+					-- table.insert(o, {
+					-- 	m_end_col = m[4].end_col,
+					-- 	prev_col = col - 1,
+					-- })
+					if col < m[4].end_col then
+						table.insert(acc.openclose, m)
+
+						if not p.close_extmark_id then
+							return nil
+						end
+
+						local surr_close_mark =
+							vim.api.nvim_buf_get_extmark_by_id(buf, M.NS, p.close_extmark_id, { details = true })
+
+						if
+							surr_close_mark[1] == surr_close_mark[3].end_row
+							and surr_close_mark[3].end_col - surr_close_mark[2] == 1
+							and vim.api.nvim_buf_get_text(
+									buf,
+									surr_close_mark[1],
+									surr_close_mark[2],
+									surr_close_mark[3].end_row,
+									surr_close_mark[3].end_col,
+									{}
+								)[1]
+								== typed
+						then
+							-- Snacks.debug.inspect({
+							-- 	m_end_col = m[4].end_col,
+							-- 	surr_end_col = surr_close_mark[3].end_col,
+							-- 	col = col,
+							-- })
+							table.insert(acc.lookahead_close, surr_close_mark)
+						end
+					end
+				else
+					error("skill_issue!()")
+				end
+
+				return acc
+			end
+		)
+
+		local icx = {
+			row = row,
+			col = col,
+			marks = marks,
+		}
+
+		if typed == vim.keycode("<BS>") then
+			return s:on_backspace(buf, win, icx)
+		elseif typed == vim.keycode("<Del>") then
 			return
-		elseif key == vim.keycode("<CR>") then
+		elseif typed == vim.keycode("<CR>") then
 			return
-		elseif key == vim.keycode("<Space>") then
+		elseif typed == vim.keycode("<Space>") then
 			return
-		elseif key == vim.keycode("<Esc>") then
+		elseif typed == vim.keycode("<Esc>") then
 			return
 		else
-			return s:on_insert(key, typed, buf, win)
+			return s:on_insert(key, typed, buf, win, icx)
 		end
 	end, M.NS)
 end
